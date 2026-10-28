@@ -1,0 +1,9 @@
+.venv/
+.git/
+models/
+scripts/
+**/__pycache__/
+*.pyc
+*.SCAN_REPORT.json
+Containerfile
+.containerignore

@@ -1,0 +1,17 @@
+# KServe ModelCar 이미지
+#
+# 직접 빌드하지 말고 hf-modelcar 를 사용한다 (검사 게이트, 파일 화이트리스트, 라벨, 빌드 후 검증).
+#   uv run hf-modelcar models/<name>
+#
+# - 빌드 컨텍스트: 모델 디렉터리 (SHA256SUMS 에 있는 파일만 포함되도록 ignorefile 로 제한)
+# - metadata 컨텍스트: SCAN_REPORT.json
+# - ModelCar 사이드카가 `sh -c 'ln -s ... && sleep infinity'` 를 실행하므로 sh/ln/sleep 이 있는 ubi-micro 를 쓴다
+# - RUN 이 없으므로 --platform linux/amd64 교차 빌드에 에뮬레이션이 필요 없다
+
+ARG BASE_IMAGE=registry.access.redhat.com/ubi9/ubi-micro:latest
+FROM ${BASE_IMAGE}
+
+COPY . /models/
+COPY --from=metadata . /metadata/
+
+USER 1001

@@ -1,0 +1,25 @@
+[project]
+name = "model-lifecycle"
+version = "0.1.0"
+description = "Download Hugging Face models and generate SHA256SUMS for integrity verification"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "huggingface-hub>=2.3.0",
+]
+
+[project.scripts]
+hf-download = "model_lifecycle.download:main"
+hf-scan = "model_lifecycle.scan:main"
+hf-modelcar = "model_lifecycle.modelcar:main"
+
+[project.optional-dependencies]
+scan = [
+    "bandit>=1.9.4",
+    "modelaudit>=0.2.54",
+    "modelscan[h5py]>=0.8.8",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.15,<0.12.0"]
+build-backend = "uv_build"
