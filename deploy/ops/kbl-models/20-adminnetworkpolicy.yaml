@@ -1,0 +1,63 @@
+# 클러스터 범위 상위 정책 (cluster-admin 전용, 프로젝트 관리자가 수정/삭제 불가)
+# 모델 파드의 egress 를 DNS / 허용 대상만 열고, 나머지 네임스페이스(같은 네임스페이스 포함)는 차단한다.
+#   Allow: 최종 허용 (NetworkPolicy 평가 안 함)
+#   Pass : NetworkPolicy 에 판단을 넘김 (어느 모델이 쓸 수 있는지는 network/allow-<ns>-<대상>.yaml)
+#   Deny : 최종 차단 (NetworkPolicy 로 열 수 없음)
+# pass-<ns>-<대상> 규칙 하나가 network/allow-<ns>-<대상>.yaml 하나와 짝이다. 새 대상은 두 곳 모두 추가한다
+# (deny-other-namespaces 앞에). 기존 대상에 모델을 추가할 때는 NetworkPolicy 의 목록만 바꾼다.
+apiVersion: policy.networking.k8s.io/v1alpha1
+kind: AdminNetworkPolicy
+metadata:
+  name: model-isolation-kbl-models
+spec:
+  # OVN-Kubernetes 는 0~99, 낮을수록 우선
+  priority: 50
+  subject:
+    pods:
+      namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kbl-models
+      # KServe 가 예측 파드에 붙이는 라벨
+      podSelector:
+        matchExpressions:
+          - key: serving.kserve.io/inferenceservice
+            operator: Exists
+  egress:
+    - name: allow-dns
+      action: Allow
+      to:
+        - pods:
+            namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: openshift-dns
+            podSelector:
+              matchLabels:
+                dns.operator.openshift.io/daemonset-dns: default
+      # 서비스 포트(53)가 아니라 DNS 파드의 실제 포트
+      ports:
+        - portNumber:
+            protocol: UDP
+            port: 5353
+        - portNumber:
+            protocol: TCP
+            port: 5353
+    # network/allow-rag-system-vector-db.yaml
+    - name: pass-rag-system-vector-db
+      action: Pass
+      to:
+        - pods:
+            namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: rag-system
+            podSelector:
+              matchLabels:
+                app: vector-db
+      ports:
+        - portNumber:
+            protocol: TCP
+            port: 6333
+    # 같은 네임스페이스도 차단한다 (모델 간 통신 금지)
+    - name: deny-other-namespaces
+      action: Deny
+      to:
+        - namespaces: {}

@@ -8,4 +8,9 @@ wheels/
 
 # Virtual environments
 .venv
-models/
+# hf-download 기본 저장 위치 (저장소 루트만)
+/models/
+
+/docs/
+/rustfs/
+/seaweedfs/

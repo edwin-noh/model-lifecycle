@@ -1,10 +1,13 @@
-"""검사를 통과한 모델 디렉터리로 KServe ModelCar(OCI) 이미지를 만든다.
+"""검사를 통과한 모델 디렉터리로 KServe ModelCar(OCI) 이미지를 만든다 (olot 방식).
+
+Red Hat 공식 ModelCar 와 같은 구조로 만든다: ubi9-micro 베이스 위에 파일 하나를 무압축 레이어 하나로 붙인다.
+컨테이너 빌드를 하지 않으므로 빌드 디스크는 모델의 약 2배(원본 + 레이어 blob)이고 podman VM 을 쓰지 않는다.
 
 1. 검사 게이트: SHA256SUMS 무결성, 스캔 리포트 통과 여부, 리포트가 지금 내용을 검사한 것인지 확인
-2. SHA256SUMS 에 있는 파일만 이미지 /models 에 넣고, 스캔 리포트는 /metadata 에 넣는다
-3. 출처/라이선스/검사 결과를 이미지 라벨로 남긴다
-4. 빌드된 이미지 내용을 sha256sum -c 로 다시 검증한다
-5. (선택) 레지스트리 push 또는 oci-archive 저장
+2. skopeo 로 베이스 이미지를 OCI 레이아웃으로 받고, olot 으로 SHA256SUMS 에 있는 파일만 /models 아래 레이어로 붙인다
+3. 출처/라이선스/검사 결과를 config 라벨과 manifest annotation 으로 남긴다 (스캔 리포트는 digest 만)
+4. 레이어 annotation 의 파일 해시(olot.layer.content.digest)를 SHA256SUMS 와 대조한다
+5. (선택) 레지스트리 push(digest 보존) 또는 oci-archive 저장
 """
 
 from __future__ import annotations
@@ -14,8 +17,6 @@ import hashlib
 import json
 import logging
 import os
-import platform
-import re
 import shlex
 import shutil
 import subprocess
@@ -31,13 +32,15 @@ from model_lifecycle.scan import verify_checksums
 log = logging.getLogger("model_lifecycle")
 
 ENV_PREFIX = "HF_MODELCAR_"
-PROJECT_DIR = Path(__file__).resolve().parents[2]
-DEFAULT_CONTAINERFILE = PROJECT_DIR / "modelcar" / "Containerfile"
+# ModelCar 사이드카가 sh/ln/sleep 을 실행하므로 이들이 있는 ubi-micro 를 쓴다
 DEFAULT_BASE_IMAGE = "registry.access.redhat.com/ubi9/ubi-micro:latest"
-# 빌드 후 검증용 (호스트 아키텍처로 실행). 베이스(ubi-micro)와 다른 이미지를 써서
-# 교차 빌드로 받은 다른 아키텍처의 같은 태그와 섞이지 않게 한다
-VERIFY_IMAGE = "registry.access.redhat.com/ubi9/ubi-minimal:latest"
 LABEL_PREFIX = "io.kblife"
+MODELCARD_FILE = "README.md"
+LAYOUT_TAG = "latest"
+# olot 이 레이어마다 다는 annotation
+ANN_CONTENT_DIGEST = "olot.layer.content.digest"
+ANN_INLAYERPATH = "olot.layer.content.inlayerpath"
+MODELS_PREFIX = "/models/"
 
 
 class GateError(Exception):
@@ -80,21 +83,6 @@ def check_gate(
     return info, report
 
 
-def _escape_pattern(name: str) -> str:
-    # ignorefile 패턴의 glob 메타문자를 이스케이프한다
-    return re.sub(r"([*?\[\]\\])", r"\\\1", name)
-
-
-def write_ignorefile(path: Path, model_dir: Path, checksum_file: str) -> list[str]:
-    """SHA256SUMS 에 있는 파일만 빌드 컨텍스트에 포함하는 화이트리스트 ignorefile 을 만든다."""
-    files = [checksum_file]
-    for line in (model_dir / checksum_file).read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            files.append(line.split(maxsplit=1)[1].lstrip("*"))
-    path.write_text("*\n" + "".join(f"!{_escape_pattern(f)}\n" for f in files))
-    return files
-
-
 def default_image(info: dict[str, Any], registry: str | None) -> str:
     repo = info["source"]["repo_id"].lower()
     tag = info["source"]["commit_sha"][:12]
@@ -129,22 +117,109 @@ def build_labels(
     return {k: v for k, v in labels.items() if v}
 
 
-def podman(*args: str) -> None:
-    cmd = ["podman", *args]
+def layer_files(model_dir: Path, checksum_file: str) -> tuple[list[Path], Path | None]:
+    """SHA256SUMS 에 있는 파일과 SHA256SUMS 자신을 레이어 대상으로 돌려준다.
+
+    README.md 는 ModelCarD 로 따로 돌려준다 (olot 규칙: modelcard 는 model_files 에 넣지 않는다).
+    """
+    names = [checksum_file]
+    for line in (model_dir / checksum_file).read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            names.append(line.split(maxsplit=1)[1].lstrip("*"))
+    modelcard = model_dir / MODELCARD_FILE if MODELCARD_FILE in names else None
+    files = [model_dir / n for n in names if n != MODELCARD_FILE]
+    return files, modelcard
+
+
+def read_layout_manifest(layout: Path) -> tuple[dict[str, Any], str]:
+    """OCI 레이아웃의 (단일 아키텍처) manifest 와 그 digest 를 읽는다."""
+    index = json.loads((layout / "index.json").read_text(encoding="utf-8"))
+    digest = index["manifests"][0]["digest"]
+    blob = layout / "blobs" / "sha256" / digest.removeprefix("sha256:")
+    manifest = json.loads(blob.read_text(encoding="utf-8"))
+    if "manifests" in manifest:
+        raise ValueError(f"단일 아키텍처 manifest 가 아닙니다: {digest}")
+    return manifest, digest
+
+
+def verify_layers(
+    manifest: dict[str, Any], model_dir: Path, checksum_file: str
+) -> dict[str, Any]:
+    """레이어 annotation 의 파일 해시가 SHA256SUMS(와 SHA256SUMS 자신)와 정확히 같은지 확인한다.
+
+    annotation 이 없는 레이어(베이스 이미지)는 대상이 아니다. 데이터를 다시 읽지 않고 manifest 만으로 검증한다.
+    """
+    expected: dict[str, str] = {}
+    for line in (model_dir / checksum_file).read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            digest, name = line.split(maxsplit=1)
+            expected[name.lstrip("*")] = digest
+    expected[checksum_file] = hashlib.sha256(
+        (model_dir / checksum_file).read_bytes()
+    ).hexdigest()
+
+    actual: dict[str, str] = {}
+    for layer in manifest["layers"]:
+        ann = layer.get("annotations") or {}
+        if ANN_INLAYERPATH not in ann:
+            continue
+        name = ann[ANN_INLAYERPATH].removeprefix(MODELS_PREFIX)
+        actual[name] = ann.get(ANN_CONTENT_DIGEST, "").removeprefix("sha256:")
+
+    mismatched = sorted(n for n in expected.keys() & actual.keys() if expected[n] != actual[n])
+    return {
+        "ok": expected == actual,
+        "layers": len(actual),
+        "missing": sorted(expected.keys() - actual.keys()),
+        "extra": sorted(actual.keys() - expected.keys()),
+        "mismatched": mismatched,
+    }
+
+
+def skopeo(*args: str) -> None:
+    cmd = ["skopeo", *args]
     log.info("$ %s", shlex.join(cmd))
     subprocess.run(cmd, check=True)
 
 
-def _host_platform() -> str:
-    arch = platform.machine().lower()
-    return "linux/" + {"x86_64": "amd64", "aarch64": "arm64"}.get(arch, arch)
+def build_layout(
+    layout: Path,
+    model_dir: Path,
+    checksum_file: str,
+    base_image: str,
+    platform: str,
+    labels: dict[str, str],
+) -> int:
+    """베이스 이미지를 OCI 레이아웃으로 받고 모델 파일을 레이어로 붙인다. 붙인 파일 수를 돌려준다."""
+    from olot.basics import oci_layers_on_top
+
+    os_name, _, arch = platform.partition("/")
+    # Red Hat 이미지의 서명은 OCI 레이아웃에 저장할 수 없으므로 떼고 받는다 (레이어를 붙이면 어차피 새 이미지가 된다)
+    skopeo(
+        "--override-os", os_name, "--override-arch", arch,
+        "copy", "--remove-signatures",
+        f"docker://{base_image}", f"oci:{layout}:{LAYOUT_TAG}",
+    )  # fmt: skip
+    files, modelcard = layer_files(model_dir, checksum_file)
+    log.info(
+        "레이어 추가: 파일 %d개%s", len(files), " + ModelCarD" if modelcard else ""
+    )
+    oci_layers_on_top(
+        layout,
+        files,
+        modelcard,
+        labels=labels,
+        annotations=labels,
+        root_dir=model_dir,
+    )
+    return len(files) + (1 if modelcard else 0)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """우선순위: 명령행 인자 > 환경변수 > 기본값."""
     env = os.environ.get
     parser = argparse.ArgumentParser(
-        description="검사를 통과한 모델 디렉터리로 KServe ModelCar 이미지를 만듭니다.",
+        description="검사를 통과한 모델 디렉터리로 KServe ModelCar 이미지를 만듭니다 (olot).",
         epilog="각 옵션은 괄호 안의 환경변수로도 지정할 수 있습니다.",
     )
     parser.add_argument(
@@ -183,12 +258,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f"sh/ln/sleep 이 있는 베이스 이미지 (env: {ENV_PREFIX}BASE_IMAGE)",
     )
     parser.add_argument(
-        "--containerfile",
-        type=Path,
-        default=env(f"{ENV_PREFIX}CONTAINERFILE", str(DEFAULT_CONTAINERFILE)),
-        help=f"Containerfile 경로 (env: {ENV_PREFIX}CONTAINERFILE)",
-    )
-    parser.add_argument(
         "--checksum-file",
         default=env(f"{ENV_PREFIX}CHECKSUM_FILE", "SHA256SUMS"),
         help=f"체크섬 파일명 (기본: SHA256SUMS, env: {ENV_PREFIX}CHECKSUM_FILE)",
@@ -200,6 +269,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=env(f"{ENV_PREFIX}ARCHIVE"),
         help=f"oci-archive 로 저장할 경로 (폐쇄망 반입용, env: {ENV_PREFIX}ARCHIVE)",
     )
+    parser.add_argument(
+        "--keep-layout",
+        action="store_true",
+        help="--push/--archive 후에도 작업용 OCI 레이아웃(<모델명>.oci-layout)을 남긴다 "
+        "(둘 다 없으면 레이아웃이 결과물이므로 항상 남긴다)",
+    )
     args = parser.parse_args(argv)
     if not args.model_dir:
         parser.error(
@@ -209,6 +284,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error(f"디렉터리가 아닙니다: {args.model_dir}")
     if args.push and not (args.registry or args.image):
         parser.error("--push 에는 --registry 또는 --image 가 필요합니다")
+    if not args.platform.startswith("linux/") or args.platform.count("/") != 1:
+        parser.error(f"--platform 은 linux/<arch> 형식이어야 합니다: {args.platform}")
     return args
 
 
@@ -223,8 +300,10 @@ def main(argv: list[str] | None = None) -> int:
         args.scan_report or model_dir.parent / f"{model_dir.name}.SCAN_REPORT.json"
     ).resolve()
 
-    if shutil.which("podman") is None:
-        log.error("podman 이 설치되어 있지 않습니다")
+    if shutil.which("skopeo") is None:
+        log.error(
+            "skopeo 가 설치되어 있지 않습니다 (macOS: brew install skopeo, RHEL: dnf install skopeo)"
+        )
         return 2
 
     log.info("검사 게이트: %s (리포트 %s)", model_dir, report_path)
@@ -236,64 +315,75 @@ def main(argv: list[str] | None = None) -> int:
 
     image = args.image or default_image(info, args.registry)
     labels = build_labels(info, report, report_path)
+    # 모델과 같은 디스크에 둔다 (레이어 blob 이 모델 크기만큼 필요)
+    layout = model_dir.parent / f"{model_dir.name}.oci-layout"
+    if layout.exists():
+        log.error("작업 레이아웃이 이미 있습니다. 지우고 다시 실행하세요: %s", layout)
+        return 2
 
+    # --push/--archive 가 없으면 레이아웃 자체가 결과물이다
+    keep = args.keep_layout or not (args.push or args.archive)
+    ok = False
     try:
-        with tempfile.TemporaryDirectory() as tmp:
-            ignorefile = Path(tmp) / "ignorefile"
-            files = write_ignorefile(ignorefile, model_dir, args.checksum_file)
-            metadata = Path(tmp) / "metadata"
-            metadata.mkdir()
-            shutil.copy(report_path, metadata / "SCAN_REPORT.json")
+        log.info("이미지 구성: %s (%s)", image, args.platform)
+        count = build_layout(
+            layout, model_dir, args.checksum_file, args.base_image, args.platform, labels
+        )
+        manifest, manifest_digest = read_layout_manifest(layout)
 
-            log.info(
-                "이미지 빌드: %s (%s, 파일 %d개)", image, args.platform, len(files)
-            )
-            label_args = [a for k, v in labels.items() for a in ("--label", f"{k}={v}")]
-            podman(
-                "build",
-                "--platform", args.platform,
-                "--build-arg", f"BASE_IMAGE={args.base_image}",
-                "--build-context", f"metadata={metadata}",
-                "--ignorefile", str(ignorefile),
-                "-f", str(args.containerfile),
-                *label_args,
-                "-t", image,
-                str(model_dir),
-            )  # fmt: skip
-
-        # 이미지를 실행하지 않고 파일시스템만 마운트하므로 아키텍처와 무관하게 검증된다
-        log.info("이미지 내용 검증 (sha256sum -c)")
-        podman(
-            "run", "--rm", "--network", "none",
-            "--platform", _host_platform(),
-            "--mount", f"type=image,src={image},dst=/check",
-            VERIFY_IMAGE,
-            "sh", "-c", f"cd /check/models && sha256sum -c --quiet {shlex.quote(args.checksum_file)}"
-            " && test -f /check/metadata/SCAN_REPORT.json",
-        )  # fmt: skip
+        result = verify_layers(manifest, model_dir, args.checksum_file)
+        if not result["ok"]:
+            log.error("레이어 검증 실패 (SHA256SUMS 와 다름): %s", result)
+            return 2
+        log.info(
+            "레이어 검증 통과: 모델 파일 %d개 = SHA256SUMS (manifest %s)",
+            count,
+            manifest_digest,
+        )
 
         if args.archive:
             archive = args.archive.resolve()
             log.info("oci-archive 저장: %s", archive)
-            podman("save", "--format", "oci-archive", "-o", str(archive), image)
+            skopeo(
+                "copy", "--preserve-digests",
+                f"oci:{layout}:{LAYOUT_TAG}", f"oci-archive:{archive}:{LAYOUT_TAG}",
+            )  # fmt: skip
 
         if args.push:
             with tempfile.TemporaryDirectory() as tmp:
                 digestfile = Path(tmp) / "digest"
-                podman("push", "--digestfile", str(digestfile), image)
+                # 레지스트리 쪽에서 레이어를 다시 압축하면 digest 가 바뀌므로 실패하게 한다
+                skopeo(
+                    "copy", "--preserve-digests", "--digestfile", str(digestfile),
+                    f"oci:{layout}:{LAYOUT_TAG}", f"docker://{image}",
+                )  # fmt: skip
                 digest = digestfile.read_text().strip()
+            if digest != manifest_digest:
+                log.error(
+                    "push 된 digest 가 검증한 manifest 와 다릅니다: %s != %s",
+                    digest,
+                    manifest_digest,
+                )
+                return 2
             repo = image.rsplit(":", 1)[0] if ":" in image.rsplit("/", 1)[-1] else image
             log.info(
                 "push 완료. InferenceService storageUri: oci://%s@%s", repo, digest
             )
+        ok = True
     except subprocess.CalledProcessError as e:
-        log.error("podman 명령 실패 (exit %d)", e.returncode)
+        log.error("skopeo 명령 실패 (exit %d)", e.returncode)
         return 2
+    finally:
+        if layout.exists() and not (ok and keep):
+            shutil.rmtree(layout)
 
     log.info("완료: %s", image)
-    if not args.push:
+    if keep:
         log.info(
-            "배포 시에는 push 후 출력되는 digest(oci://...@sha256:...)로 지정하세요"
+            "OCI 레이아웃: %s (push: skopeo copy --preserve-digests oci:%s:%s docker://<image>)",
+            layout,
+            layout,
+            LAYOUT_TAG,
         )
     return 0
 

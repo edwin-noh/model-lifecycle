@@ -143,32 +143,46 @@ scripts/podman-scan.sh models/<name> --fail-on medium # 뒤의 옵션은 hf-scan
 
 ## ModelCar 이미지 만들기 (`hf-modelcar`)
 
-검사를 통과한 모델 디렉터리를 KServe ModelCar(OCI) 이미지로 만듭니다 (podman 필요).
+검사를 통과한 모델 디렉터리를 KServe ModelCar(OCI) 이미지로 만듭니다.
+[olot](https://github.com/containers/olot) 으로 `ubi9/ubi-micro` 위에 **파일 하나를 무압축 레이어 하나**로 붙입니다.
+Red Hat 공식 ModelCar(`registry.redhat.io/rhai/modelcar-*`)와 같은 구조입니다.
+컨테이너 빌드를 하지 않으므로 podman 이 필요 없고, 빌드 디스크는 **모델의 약 2배**(원본 + 레이어 blob, 호스트 디스크)입니다.
+
+**skopeo 가 필요합니다** (macOS: `brew install skopeo`, RHEL: `dnf install skopeo`). push 전에 `skopeo login <registry>`.
 
 ```bash
-uv run hf-modelcar models/<name>                                   # 로컬 빌드만
+uv run hf-modelcar models/<name>                                   # OCI 레이아웃만 만듦 (models/<name>.oci-layout)
 uv run hf-modelcar models/<name> --registry quay.internal/ai --push  # 빌드 + push, digest 출력
 uv run hf-modelcar models/<name> --archive /path/<name>.oci.tar     # 폐쇄망 반입용 파일로 저장
 ```
 
-1. **검사 게이트** — 하나라도 실패하면 빌드하지 않습니다 (종료 코드 1)
+1. **검사 게이트** — 하나라도 실패하면 이미지를 만들지 않습니다 (종료 코드 1)
    - `SHA256SUMS` 와 실제 파일이 일치 (추가/누락 파일 없음)
    - 스캔 리포트(`models/<name>.SCAN_REPORT.json`)가 `passed: true`
    - 리포트에 기록된 SHA256SUMS 의 sha256 이 지금과 같음 (검사한 내용 그대로인지)
    - 리포트와 `MODEL_INFO.json` 의 commit sha 가 같음
-2. **빌드** — `modelcar/Containerfile` (`ubi9/ubi-micro` 베이스)
-   - `/models`: `SHA256SUMS` 에 있는 파일만 (`.cache/` 등은 제외), `/metadata/SCAN_REPORT.json`: 스캔 리포트
-   - 기본 `--platform linux/amd64`. Mac(arm64)에서 그냥 빌드하면 클러스터에서 ModelCar 사이드카가 실행되지 않습니다.
-     RUN 이 없어서 교차 빌드에 에뮬레이션이 필요 없습니다
-   - 이미지 이름 기본값: `<registry|localhost>/models/<repo_id 소문자>:<commit 앞 12자>`
-3. **라벨** — 출처, commit, 라이선스, 파라미터 수, SHA256SUMS digest, 스캔 결과/리포트 digest
+2. **베이스** — `skopeo` 로 `--base-image`(기본 `ubi9/ubi-micro`)를 `--platform`(기본 `linux/amd64`) 하나만 OCI 레이아웃으로 받습니다.
+   서명은 떼고 받습니다 (레이어를 붙이면 새 이미지가 됨). Mac(arm64)에서도 에뮬레이션 없이 amd64 이미지가 만들어집니다
+3. **레이어** — `SHA256SUMS` 에 있는 파일과 `SHA256SUMS` 자신만 `/models/<상대경로>` 에 하나씩 무압축 레이어로 붙입니다
+   (`.cache/` 등은 제외, 파일 소유자 root·권한 0664 로 OpenShift 임의 UID 에서 읽기 가능).
+   `README.md` 는 ModelCarD(gzip 레이어, `io.opendatahub.layers.modelcard`)가 됩니다.
+   레이어마다 `olot.layer.content.digest`(파일 sha256) annotation 이 붙습니다.
+   이미지 이름 기본값: `<registry|localhost>/models/<repo_id 소문자>:<commit 앞 12자>`
+4. **라벨** — 출처, commit, 라이선스, 파라미터 수, SHA256SUMS digest, 스캔 결과/리포트 digest 를
+   config 라벨과 manifest annotation 에 모두 남깁니다 (스캔 리포트 원본은 이미지에 넣지 않음)
    ```bash
-   podman image inspect <image> --format '{{range $k,$v := .Labels}}{{$k}}={{$v}}{{"\n"}}{{end}}' | grep io.kblife
+   skopeo inspect --config docker://<image> | python3 -c \
+     'import json,sys; [print(k, v) for k, v in json.load(sys.stdin)["config"]["Labels"].items() if k.startswith("io.kblife")]'
    ```
-4. **빌드 후 검증** — 이미지를 실행하지 않고 파일시스템만 마운트해서 `sha256sum -c` (아키텍처 무관)
-5. **push / archive** — `--push` 는 `podman push --digestfile` 후 InferenceService 에 넣을
-   `oci://<repo>@sha256:...` 를 출력합니다. 사전에 `podman login <registry>` 가 필요합니다.
-   폐쇄망 내부에서는 `skopeo copy oci-archive:<name>.oci.tar docker://<내부 레지스트리>/<repo>:<tag>` 로 올립니다
+5. **레이어 검증** — 데이터를 다시 읽지 않고, manifest 의 레이어 annotation(파일 경로·해시)이 `SHA256SUMS` 와
+   정확히 같은지 확인합니다 (추가/누락/해시 불일치면 종료 코드 2)
+6. **push / archive** — `--preserve-digests` 로 복사하므로 레이어가 다시 압축되어 digest 가 바뀌면 실패합니다.
+   `--push` 는 push 된 digest 가 검증한 manifest 와 같은지 확인한 뒤 InferenceService 에 넣을 `oci://<repo>@sha256:...` 를 출력합니다.
+   폐쇄망 내부에서는 `skopeo copy --preserve-digests oci-archive:<name>.oci.tar:latest docker://<내부 레지스트리>/<repo>:<tag>` 로 올립니다
+   (digest 가 그대로라 반입 전에 기록한 digest 를 그대로 씁니다)
+
+작업 레이아웃(`models/<name>.oci-layout`)은 `--push`/`--archive` 후 지웁니다 (`--keep-layout` 으로 보존).
+둘 다 없으면 레이아웃이 결과물이므로 남깁니다.
 
 | 옵션 | 환경변수 | 설명 |
 |---|---|---|
@@ -176,12 +190,16 @@ uv run hf-modelcar models/<name> --archive /path/<name>.oci.tar     # 폐쇄망 
 | `--scan-report` | `HF_MODELCAR_SCAN_REPORT` | 기본 `<부모>/<모델명>.SCAN_REPORT.json` |
 | `--registry` | `HF_MODELCAR_REGISTRY` | 이미지 이름 앞에 붙일 레지스트리 |
 | `--image` | `HF_MODELCAR_IMAGE` | 이미지 전체 이름 (지정 시 registry 무시) |
-| `--platform` | `HF_MODELCAR_PLATFORM` | 기본 `linux/amd64` |
+| `--platform` | `HF_MODELCAR_PLATFORM` | `linux/<arch>`, 기본 `linux/amd64` |
 | `--base-image` | `HF_MODELCAR_BASE_IMAGE` | `sh`/`ln`/`sleep` 이 있어야 함 (기본 `ubi9/ubi-micro`) |
+| `--checksum-file` | `HF_MODELCAR_CHECKSUM_FILE` | 기본 `SHA256SUMS` |
 | `--archive` | `HF_MODELCAR_ARCHIVE` | oci-archive 저장 경로 |
 | `--push` | | 빌드 후 push (`--registry` 또는 `--image` 필요) |
+| `--keep-layout` | | push/archive 후에도 OCI 레이아웃 보존 |
 
-종료 코드: `0` 성공 / `1` 검사 게이트 실패 / `2` 빌드·검증·push 실패
+종료 코드: `0` 성공 / `1` 검사 게이트 실패 / `2` 빌드·검증·push 실패 (skopeo 없음 포함)
+
+Red Hat `rhai/modelcar-*` 처럼 이미 빌드된 ModelCar 이미지를 폐쇄망으로 옮기는 절차는 [docs/modelcar-import.md](docs/modelcar-import.md) 를 참고하세요.
 
 > 배포 시 InferenceService `storageUri` 는 태그가 아니라 **digest** (`oci://...@sha256:...`)로 지정하세요.
 > 태그는 바뀔 수 있지만 digest 는 검사한 이미지와 정확히 일치합니다.
@@ -189,12 +207,17 @@ uv run hf-modelcar models/<name> --archive /path/<name>.oci.tar     # 폐쇄망 
 
 ### 다음 단계 (제안)
 
-- **이미지 서명**: `cosign sign` 또는 `podman push --sign-by-sigstore` 로 승인된 이미지에 서명하고,
+- **이미지 서명**: `cosign sign` 또는 `skopeo copy --sign-by-sigstore` 로 승인된 이미지에 서명하고,
   OpenShift `ClusterImagePolicy`(sigstore 검증)로 모델 네임스페이스에서 서명된 이미지만 실행되게 합니다.
   반입 승인 → 서명 → 클러스터 검증으로 "검사하지 않은 모델은 배포 불가"를 강제할 수 있습니다.
 - **레지스트리 취약점 스캔**(Quay/Clair): 모델 이미지에서는 베이스(ubi-micro) 패키지만 대상이 됩니다.
 
-## RHOAI 배포 시 네트워크 격리
+## RHOAI 배포
 
-검증한 모델을 RHOAI(KServe)에 배포할 때 다른 네임스페이스와 클러스터 외부 접근을 막는 매니페스트는
-[`deploy/network-isolation/`](deploy/network-isolation/README.md) 를 참고하세요.
+검증한 모델을 RHOAI 3.5(KServe Standard)에 GitOps 로 배포하는 매니페스트는 [`deploy/`](deploy/README.md) 를 참고하세요.
+
+- `deploy/ops/`: Ops팀. 플랫폼 설정, 모델 네임스페이스,
+  네트워크 격리, RBAC, vLLM 런타임, Argo CD 설정
+- `deploy/ai/`: AI팀. InferenceService
+- 런타임 등급(ga/fast/upstream)과 모델 출처(validated/community)는 라벨 + Nexus repo 로 구분
+- 에이전트 개발자용 모델 목록: [`deploy/ai/CATALOG.md`](deploy/ai/CATALOG.md) (`scripts/model-catalog.py` 로 생성)
