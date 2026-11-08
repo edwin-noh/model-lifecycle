@@ -1,0 +1,43 @@
+# hf-download 이미지: 인터넷 연결 PC 에서 Hugging Face 모델을 받는다 (UBI9, 비root, huggingface-hub 만)
+#
+# 빌드 (저장소 루트에서. pyproject.toml / uv.lock / src 를 복사하므로 컨텍스트는 루트)
+#   podman build -f download/Containerfile -t localhost/model-lifecycle-download:latest .
+# 실행
+#   download/podman-download.sh | download/podman-download.ps1
+
+ARG BASE_IMAGE=registry.access.redhat.com/ubi9/python-312-minimal
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.15
+
+FROM ${UV_IMAGE} AS uv
+
+FROM ${BASE_IMAGE} AS builder
+USER 0
+COPY --from=uv /uv /usr/local/bin/uv
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_PYTHON=/usr/bin/python3.12 \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+WORKDIR /build
+# 의존성 레이어를 먼저 만들어 소스 변경 시 재설치를 피한다
+COPY pyproject.toml uv.lock .python-version ./
+RUN uv sync --frozen --no-dev --no-install-project
+COPY README.md ./
+COPY src ./src
+RUN uv sync --frozen --no-dev --no-editable
+
+FROM ${BASE_IMAGE}
+LABEL org.opencontainers.image.title="model-lifecycle-download" \
+      org.opencontainers.image.description="Download Hugging Face models with SHA256SUMS and MODEL_INFO.json"
+COPY --from=builder /opt/venv /opt/venv
+# 파일은 마운트한 디스크(local_dir)에 바로 받는다. xet 청크 캐시가 podman VM 디스크를 채우지 않게 끈다
+ENV PATH=/opt/venv/bin:$PATH \
+    HOME=/tmp \
+    HF_HOME=/tmp/hf_home \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    HF_XET_CHUNK_CACHE_SIZE_BYTES=0
+USER 1001
+# 운영자 디스크를 /work/models 에 마운트한다. hf-download 는 models/<owner>__<name> 에 저장한다
+WORKDIR /work
+ENTRYPOINT ["hf-download"]

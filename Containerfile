@@ -2,6 +2,7 @@
 #
 # 빌드: podman build -t localhost/model-lifecycle-scan:0.1.0 .
 # 실행: scripts/podman-scan.sh <model_dir>
+# (다운로드 이미지는 download/Containerfile)
 
 ARG BASE_IMAGE=registry.access.redhat.com/ubi9/python-312-minimal
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.15
@@ -39,8 +40,7 @@ ENV PATH=/opt/venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
     PROMPTFOO_DISABLE_TELEMETRY=1 \
     NO_ANALYTICS=1 \
-    HF_HUB_OFFLINE=1 \
-    HF_SCAN_MODEL_DIR=/models
+    HF_HUB_OFFLINE=1
 
 USER 1001
 WORKDIR /tmp

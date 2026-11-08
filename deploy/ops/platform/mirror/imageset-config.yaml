@@ -9,8 +9,8 @@
 #
 # - OCP_VERSION(예: 4.20), 채널은 클러스터에 맞게 바꾼다. 채널은 OperatorHub 가 연결된 클러스터에서 확인:
 #     oc get packagemanifest rhods-operator -n openshift-marketplace -o jsonpath='{.status.channels[*].name}'
-# - ModelCar 이미지는 미러 대상이 아니다. hf-modelcar --archive 로 만든 oci-archive 를
-#   skopeo copy 로 Nexus models-validated / models-community repo 에 직접 올린다
+# - ModelCar 이미지는 미러 대상이 아니다. 반입한 모델 파일로 폐쇄망에서 hf-modelcar --registry 로 빌드해
+#   Nexus models-validated / models-community repo 에 push 한다. 베이스 ubi9/ubi-micro 는 Nexus 에 따로 올려 둔다
 # - vLLM 런타임 이미지는 여기서 받은 뒤, 승인한 것만 skopeo copy 로 Nexus vllm-<등급> repo 에 digest 로 올린다.
 #   ServingRuntime 은 Nexus 경로를 직접 참조한다
 apiVersion: mirror.openshift.io/v2alpha1
@@ -31,5 +31,3 @@ mirror:
     - name: registry.redhat.io/rhaiis/vllm-cuda-rhel9@sha256:VLLM_DIGEST   # 3.2.4
     # 커뮤니티 vLLM (승인 후 Nexus vllm-upstream 으로 복사)
     - name: docker.io/vllm/vllm-openai@sha256:VLLM_UPSTREAM_DIGEST   # v0.28.0
-    # 배포 후 점검용 curl 파드
-    - name: registry.access.redhat.com/ubi9/ubi-minimal:latest

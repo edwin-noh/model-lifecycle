@@ -1,6 +1,6 @@
 # Qwen/Qwen3-4B-Instruct-2507 (검증 모델, GA 런타임)
 # AI팀이 관리한다. 허용되는 필드와 규칙은 deploy/ai/README.md
-# - 이미지는 hf-modelcar 로 만들어 Nexus models-<출처> repo 에 push 한다. --push 후 출력되는 digest 를
+# - 이미지는 hf-modelcar --registry 로 만들어 Nexus models-<출처> repo 에 push 한다. push 후 출력되는 digest 를
 #   storageUri 에 쓰면 반입 심사한 내용과 정확히 일치시킬 수 있다 (태그는 바뀔 수 있음)
 # - 노드(kubelet)가 이미지를 받으므로 파드에 모델 다운로드용 egress 가 필요 없다
 # - 등급 승격/변경 시 kbl.io/runtime-tier 와 runtime 을 함께 바꾼다
@@ -13,13 +13,15 @@ metadata:
     openshift.io/display-name: Qwen3-4B-Instruct-2507
     # 모델 카탈로그(CATALOG.md)에 표시된다
     openshift.io/description: "범용 소형 지시 모델. 에이전트 tool calling, RAG 응답 생성"
-    serving.kserve.io/deploymentMode: Standard
+    serving.kserve.io/deploymentMode: RawDeployment
     # ops/platform/hardwareprofile-gpu.yaml. toleration/nodeSelector 를 webhook 이 넣어 준다
+    # (hardware-profile-* annotation 이름은 3.5 문서 미확인. oc apply --dry-run=server 로 확인)
     opendatahub.io/hardware-profile-name: gpu-1x
     opendatahub.io/hardware-profile-namespace: redhat-ods-applications
     opendatahub.io/model-type: generative
     # 토큰 인증 사이드카는 SA 토큰으로 API 서버를 호출하므로 네트워크 격리와 충돌한다.
     # 인증은 앞단 게이트웨이에서 처리한다 (ops/network-isolation/README.md)
+    # (대시보드 "Require token authentication" 에 해당. ISVC 의 annotation 이름은 3.5 문서 미확인)
     security.opendatahub.io/enable-auth: "false"
   labels:
     kbl.io/runtime-tier: ga
@@ -43,16 +45,7 @@ spec:
         # 에이전트(function calling)용: OpenAI API 의 tools 요청을 처리한다. 파서는 모델 계열에 맞춘다
         - --enable-auto-tool-choice
         - --tool-call-parser=hermes
-      env:
-        # 런타임/라이브러리의 외부 호출(모델 다운로드, 사용 통계)을 끈다
-        - name: HF_HUB_OFFLINE
-          value: "1"
-        - name: TRANSFORMERS_OFFLINE
-          value: "1"
-        - name: VLLM_NO_USAGE_STATS
-          value: "1"
-        - name: DO_NOT_TRACK
-          value: "1"
+      # HF/vLLM 오프라인 env 는 ServingRuntime 에 있다 (Ops팀 관리)
       # hardware profile(gpu-1x) 범위 안에서 지정한다
       resources:
         limits:

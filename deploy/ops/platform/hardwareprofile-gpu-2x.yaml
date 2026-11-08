@@ -1,6 +1,7 @@
 # GPU 2장 프로파일 (tensor parallel). 단일 GPU 메모리에 들어가지 않는 모델용 (예: 26B bf16, 가중치 약 52GB).
 # - ISVC 는 opendatahub.io/hardware-profile-name: gpu-2x 로 참조하고 args 에 --tensor-parallel-size=2 를 준다
 # - 런타임에 /dev/shm(Memory emptyDir)이 있어야 한다 (GPU 간 통신)
+# apiVersion/필드는 3.5 문서에 YAML 예시가 없어 미확인. oc explain hardwareprofile 과 dry-run 으로 확인한다
 apiVersion: infrastructure.opendatahub.io/v1
 kind: HardwareProfile
 metadata:

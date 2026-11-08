@@ -16,7 +16,8 @@
 | `kbl.io/runtime-tier: ga\|fast\|upstream` | `spec.predictor.model.runtime: vllm-<등급>-<버전>` |
 | `kbl.io/model-source: validated\|community` | `storageUri: oci://nexus.internal.example:5000/models-<출처>/...@sha256:<digest>` |
 
-**바꿀 수 있는 것**: 이름, display-name, `storageUri`(허용된 repo 의 digest), 등급/출처(위 표대로), `args`, `env`,
+**바꿀 수 있는 것**: 이름, display-name, `storageUri`(허용된 repo 의 digest), 등급/출처(위 표대로), `args`,
+`env`(모델별 값만. HF/vLLM 오프라인 env 는 ServingRuntime 에 있으므로 넣지 않음),
 `resources`(고른 HardwareProfile 과 네임스페이스 GPU quota 범위), replica 수
 
 **쓰지 않는 것**
@@ -34,8 +35,9 @@
 
 ```bash
 # 1. 반입 검사를 통과한 모델을 이미지로 빌드/push (커뮤니티 모델은 models-community)
-uv run hf-modelcar models/<name> \
-  --image nexus.internal.example:5000/models-community/<owner>/<model>:<commit 12자> --push
+#    이미지 이름: <registry>/<repo_id 소문자>:<commit 12자>
+uv run hf-modelcar models/<name> --registry nexus.internal.example:5000/models-community \
+  --base-image nexus.internal.example:5000/ubi9/ubi-micro:latest
 #    출력되는 oci://...@sha256:... 를 storageUri 에 쓴다
 
 # 2. 예시를 복사해 수정

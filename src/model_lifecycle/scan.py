@@ -25,11 +25,18 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
-from model_lifecycle.download import MODEL_INFO_FILE, hash_file, iter_files
+from model_lifecycle.common import (
+    DEFAULT_CHECKSUM_FILE,
+    HF_LOCAL_CACHE_DIR,
+    MODEL_INFO_FILE,
+    hash_file,
+    iter_files,
+    read_checksums,
+    setup_logging,
+)
 
 log = logging.getLogger("model_lifecycle")
 
-ENV_PREFIX = "HF_SCAN_"
 SCHEMA_VERSION = 1
 SEVERITIES = ["low", "medium", "high", "critical"]
 # 도구별 severity 를 공통 등급으로 변환
@@ -50,11 +57,7 @@ def verify_checksums(
     if not path.is_file():
         return {"ok": False, "error": f"{checksum_file} 파일이 없습니다"}
 
-    expected: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            digest, name = line.split(maxsplit=1)
-            expected[name.lstrip("*")] = digest
+    expected = read_checksums(path)
 
     mismatched, missing = [], []
     for name, digest in sorted(expected.items()):
@@ -205,7 +208,9 @@ def scan_bandit(model_dir: Path, workdir: Path) -> tuple[dict, list[dict]]:
         }, []
     out = workdir / "bandit.json"
     args = ["-r", str(model_dir), "-f", "json", "-o", str(out), "-q"]
-    status = run_tool("bandit", [*args, "-x", str(model_dir / ".cache")], out, workdir)
+    status = run_tool(
+        "bandit", [*args, "-x", str(model_dir / HF_LOCAL_CACHE_DIR)], out, workdir
+    )
     result = status.pop("result", None) or {}
     status["errors"] += [
         f"{e.get('filename')}: {e.get('reason')}" for e in result.get("errors", [])
@@ -228,44 +233,28 @@ def _commit_sha(model_dir: Path) -> str | None:
         info = json.loads((model_dir / MODEL_INFO_FILE).read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         return None
-    return info.get("source", {}).get("commit_sha") or info.get("commit_sha")
+    return info.get("source", {}).get("commit_sha")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """우선순위: 명령행 인자 > 환경변수 > 기본값."""
-    env = os.environ.get
     parser = argparse.ArgumentParser(
-        description="다운로드한 모델을 정적 검사하고 SCAN_REPORT.json 을 생성합니다.",
-        epilog="각 옵션은 괄호 안의 환경변수로도 지정할 수 있습니다.",
+        description="다운로드한 모델을 정적 검사하고 리포트(JSON)를 생성합니다."
     )
     parser.add_argument(
-        "model_dir",
-        nargs="?",
-        type=Path,
-        default=env(f"{ENV_PREFIX}MODEL_DIR"),
-        help=f"hf-download 로 받은 모델 디렉터리 (env: {ENV_PREFIX}MODEL_DIR)",
+        "model_dir", type=Path, help="hf-download 로 받은 모델 디렉터리"
     )
     parser.add_argument(
         "--report-file",
-        default=env(f"{ENV_PREFIX}REPORT_FILE", "SCAN_REPORT.json"),
-        help=f"리포트 파일명 (기본: SCAN_REPORT.json, env: {ENV_PREFIX}REPORT_FILE)",
-    )
-    parser.add_argument(
-        "--checksum-file",
-        default=env(f"{ENV_PREFIX}CHECKSUM_FILE", "SHA256SUMS"),
-        help=f"체크섬 파일명 (기본: SHA256SUMS, env: {ENV_PREFIX}CHECKSUM_FILE)",
+        default="SCAN_REPORT.json",
+        help="리포트 경로. 상대경로는 모델 디렉터리 기준 (기본: SCAN_REPORT.json)",
     )
     parser.add_argument(
         "--fail-on",
         choices=SEVERITIES,
-        default=env(f"{ENV_PREFIX}FAIL_ON", "high"),
-        help=f"이 등급 이상 발견 시 실패 (기본: high, env: {ENV_PREFIX}FAIL_ON)",
+        default="high",
+        help="이 등급 이상 발견 시 실패 (기본: high)",
     )
     args = parser.parse_args(argv)
-    if not args.model_dir:
-        parser.error(
-            f"model_dir 를 인자 또는 {ENV_PREFIX}MODEL_DIR 환경변수로 지정하세요"
-        )
     if not args.model_dir.is_dir():
         parser.error(f"디렉터리가 아닙니다: {args.model_dir}")
     return args
@@ -273,16 +262,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     """종료 코드: 0 통과, 1 무결성 실패 또는 fail-on 이상 발견, 2 검사 미완료(도구 오류)."""
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
-    )
+    setup_logging()
     args = parse_args(argv)
     # 도구는 임시 디렉터리를 cwd 로 실행되므로 절대경로로 넘겨야 한다
     model_dir: Path = args.model_dir.resolve()
 
-    log.info("무결성 검증: %s", model_dir / args.checksum_file)
+    log.info("무결성 검증: %s", model_dir / DEFAULT_CHECKSUM_FILE)
     integrity = verify_checksums(
-        model_dir, args.checksum_file, exclude={args.report_file}
+        model_dir, DEFAULT_CHECKSUM_FILE, exclude={args.report_file}
     )
     tools: dict[str, Any] = {}
     findings: list[dict[str, Any]] = []
@@ -309,7 +296,7 @@ def main(argv: list[str] | None = None) -> int:
 
     report = {
         "schema_version": SCHEMA_VERSION,
-        "model_dir": str(model_dir.resolve()),
+        "model_dir": str(model_dir),
         "commit_sha": _commit_sha(model_dir),
         "scanned_at": datetime.now(UTC).isoformat(),
         "scanned_by": getpass.getuser(),
@@ -318,9 +305,7 @@ def main(argv: list[str] | None = None) -> int:
         "summary": {
             "passed": passed,
             "fail_on": args.fail_on,
-            "by_severity": {
-                s: c for s, c in Counter(f["severity"] for f in findings).items()
-            },
+            "by_severity": dict(Counter(f["severity"] for f in findings)),
             "blocking_count": len(blocking),
             "tool_errors": tool_errors,
         },

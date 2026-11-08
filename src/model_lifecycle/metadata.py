@@ -18,10 +18,11 @@ from huggingface_hub import HfApi
 from huggingface_hub.errors import HfHubHTTPError
 from huggingface_hub.hf_api import ModelInfo
 
+from model_lifecycle.common import HUB_URL
+
 log = logging.getLogger("model_lifecycle")
 
 SCHEMA_VERSION = 1
-HUB_URL = "https://huggingface.co"
 
 EXPAND_FIELDS = [
     "author",

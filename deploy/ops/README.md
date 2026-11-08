@@ -8,7 +8,7 @@ NFD, NVIDIA GPU Operator, RHOAI Operator, OpenShift GitOps 는 이미 설치되�
 
 ```
 platform/                          클러스터 설정 (Argo CD: kbl-ops-platform)
-  datasciencecluster.yaml          DSC v2: dashboard, kserve(Standard)
+  datasciencecluster.yaml          DSC v2: dashboard, kserve(RawDeployment)
   hardwareprofile-gpu.yaml         HardwareProfile gpu-1x
   hardwareprofile-gpu-2x.yaml      HardwareProfile gpu-2x (tensor parallel)
   registry-ca.yaml                 Nexus CA (ConfigMap + image.config additionalTrustedCA)
@@ -83,7 +83,7 @@ GitOps 없이 적용할 때는 같은 순서로 `oc apply -f` (`kbl-models/` 는
 수동으로 확인할 것:
 
 ```bash
-# ModelCar 사용 설정 (enableModelcar: true)
+# ModelCar 사용 설정 (enableModelcar: true, 3.5 문서 미확인)
 oc get cm inferenceservice-config -n redhat-ods-applications -o jsonpath='{.data.storageInitializer}'
 # GPU 노드
 oc get nodes -l nvidia.com/gpu.present=true \
@@ -103,6 +103,7 @@ oc get cm cluster-monitoring-config -n openshift-monitoring -o jsonpath='{.data.
 skopeo copy --all docker://registry.redhat.io/rhaiis/vllm-cuda-rhel9@sha256:<digest> \
   docker://nexus.internal.example:5000/vllm-fast/vllm-cuda-rhel9@sha256:<digest>
 # 2. runtimes/vllm-ga-3-2-4.yaml 를 복사해 이름(vllm-<등급>-<버전>), 라벨, support-status, runtime-version, image 수정 → 커밋
+#    (HF/vLLM 오프라인 env 는 그대로 둔다)
 ```
 
 - 이름에 버전을 넣으므로 여러 버전이 같이 있어도 되고, 새 런타임을 추가해도 기존 모델은 재시작되지 않습니다

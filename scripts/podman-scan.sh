@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Podman 컨테이너에서 hf-scan 을 실행한다.
 #
-# 사용법: scripts/podman-scan.sh [--build] <model_dir> [hf-scan 옵션...]
+# 사용법: scripts/podman-scan.sh [--build] <model_dir> [--fail-on low|medium|high|critical]
 #   --build              이미지를 강제로 다시 빌드
 #   HF_SCAN_IMAGE        사용할 이미지 (기본: localhost/model-lifecycle-scan:<version>)
 #   HF_SCAN_REPORT_DIR   리포트 저장 디렉터리 (기본: 모델 디렉터리의 부모)
@@ -59,8 +59,8 @@ podman run --rm \
     --userns keep-id \
     -v "${model_dir}:/models:ro,Z" \
     -v "${report_dir}:/reports:Z" \
-    -e "HF_SCAN_REPORT_FILE=/reports/${model_name}.SCAN_REPORT.json" \
-    "${IMAGE}" ${scan_args[@]+"${scan_args[@]}"} || status=$?
+    "${IMAGE}" /models --report-file "/reports/${model_name}.SCAN_REPORT.json" \
+    ${scan_args[@]+"${scan_args[@]}"} || status=$?
 
 if [[ ${status} -eq 125 ]]; then
     echo "podman 실행 오류 (macOS 라면 podman machine 에 공유된 경로(/Users 등) 아래의 모델인지 확인하세요)" >&2

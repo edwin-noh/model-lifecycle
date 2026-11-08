@@ -1,6 +1,6 @@
-# RHOAI 3.5 배포 (KServe Standard + ModelCar)
+# RHOAI 3.5 배포 (KServe RawDeployment + ModelCar)
 
-`hf-modelcar` 로 만든 ModelCar 이미지를 RHOAI 3.5 에서 KServe Standard(RawDeployment) 모드로 서빙합니다.
+`hf-modelcar` 로 만든 ModelCar 이미지를 RHOAI 3.5 에서 KServe RawDeployment 모드로 서빙합니다.
 OpenShift GitOps(Argo CD)로 배포하고, Ops팀과 AI팀이 폴더를 나눠 관리합니다.
 나중에 리포를 나눌 때는 `ops/`, `ai/` 을 각각 리포로 옮기고 Argo CD 의 `repoURL`/`path` 만 바꿉니다.
 
@@ -59,5 +59,16 @@ client.chat.completions.create(model="qwen3-4b-instruct", messages=[...], tools=
   호출하는 에이전트는 영향을 받지 않습니다. 인증도 이 앞단에서 처리합니다
 - **이미지 서명**: Nexus `vllm-ga` / `models-validated` 이미지에 cosign 서명 + `ClusterImagePolicy`
 
-> RHOAI 3.5 필드(DSC `v2`, HardwareProfile `infrastructure.opendatahub.io/v1`, `deploymentMode: Standard`)는
-> 3.5 대상 공개 예시를 기준으로 했습니다. 처음 적용할 때 `oc apply --dry-run=server` 로 스키마를 확인하세요.
+## RHOAI 3.5 문서 대조
+
+| 항목 | 상태 | 근거 (RHOAI 3.5 문서) |
+|---|---|---|
+| ISVC `serving.kserve.io/deploymentMode: RawDeployment` | 확인 | *Deploying models* — 2.1 About KServe deployment modes, ISVC 예시 |
+| DSC `datasciencecluster.opendatahub.io/v2`, `kserve.rawDeploymentServiceConfig` (Headless/Headed) | 확인 | *Installing and uninstalling … in a disconnected environment*, *Enabling AI safety with guardrails* 의 DSC 예시 |
+| ModelCar(`storageUri: oci://`) | 확인 | *Deploying models* — 1.1 OCI-based model storage |
+| 토큰 인증 ISVC 에 OAuth proxy 사이드카 추가 | 확인 | *Installing … disconnected environment* — 3.5.1.1 Configure OAuth proxy sidecar resources for KServe |
+| ISVC `security.opendatahub.io/enable-auth` | **3.5 미확인** | 3.5 문서에는 LLMInferenceService/Guardrails 예시만 있음 |
+| HardwareProfile `infrastructure.opendatahub.io/v1`, ISVC `opendatahub.io/hardware-profile-name/-namespace` | **3.5 미확인** | 3.5 문서에 YAML 예시 없음 |
+| `inferenceservice-config` 의 `storageInitializer.enableModelcar` | **3.5 미확인** | 3.5 문서에 없음 |
+
+미확인 항목은 처음 적용할 때 `oc explain` 과 `oc apply --dry-run=server` 로 확인하세요.

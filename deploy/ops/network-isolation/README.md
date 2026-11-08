@@ -1,4 +1,4 @@
-# 반입 모델 네트워크 격리 (RHOAI KServe Standard + ModelCar)
+# 반입 모델 네트워크 격리 (RHOAI KServe RawDeployment + ModelCar)
 
 검증을 마친 모델을 RHOAI 에 배포할 때 모델 파드가 다음만 할 수 있도록 제한합니다.
 
@@ -17,7 +17,7 @@
 | 2 | `EgressFirewall` (`21-egressfirewall.yaml`) | cluster-admin | **클러스터 밖으로 나가는 트래픽 전부 차단** (`0.0.0.0/0`, `::/0`) |
 | 3 | `NetworkPolicy` (`31-`, `32-`, `network/allow-<ns>-<대상>.yaml`) | Ops팀 | 모델 파드 egress 기본 차단 + DNS 허용 + 대상별로 **목록에 있는 모델만** 허용 |
 | 3 | `NetworkPolicy` (`33-networkpolicy-ingress.yaml`) | Ops팀 | 모델 파드 ingress: 소비 네임스페이스, User Workload Monitoring, 같은 ns 의 모델이 아닌 파드만 8080 허용 |
-| + | ServiceAccount, env | Ops팀 / 정책 | SA 토큰 미마운트(Kubernetes API 로 다른 ns 조회 차단), vLLM/HF 외부 호출 비활성화 |
+| + | ServiceAccount, ServingRuntime env | Ops팀 | SA 토큰 미마운트(Kubernetes API 로 다른 ns 조회 차단), vLLM/HF 외부 호출 비활성화 |
 
 NetworkPolicy 만으로도 동작하지만 프로젝트 관리자(RHOAI 프로젝트 admin)가 지울 수 있습니다.
 AdminNetworkPolicy 와 EgressFirewall 은 cluster-admin 만 바꿀 수 있으므로, NetworkPolicy 가 지워져도
@@ -72,7 +72,7 @@ oc apply -R -f deploy/ops/kbl-models/
 - AdminNetworkPolicy `priority` 는 OVN-Kubernetes 에서 0~99 (낮을수록 우선)이며 같은 우선순위끼리 겹치면 안 됩니다.
   소비 주체별로 네임스페이스를 더 만들면 다른 값(예: 51, 52, ...)을 쓰세요.
 - vLLM/HF 오프라인 env (`HF_HUB_OFFLINE`, `TRANSFORMERS_OFFLINE`, `VLLM_NO_USAGE_STATS`, `DO_NOT_TRACK`)는
-  네트워크가 막혀 있어도 시도 자체를 없애 타임아웃 지연과 불필요한 로그를 줄입니다.
+  ServingRuntime 에 두어 모든 모델에 적용됩니다. 네트워크가 막혀 있어도 시도 자체를 없애 타임아웃 지연과 불필요한 로그를 줄입니다.
 
 ## 검증 (클러스터)
 

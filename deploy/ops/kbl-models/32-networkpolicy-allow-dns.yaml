@@ -1,3 +1,5 @@
+# 모델 파드의 DNS 조회만 허용한다 (31- 의 egress 기본 차단 예외).
+# 20-adminnetworkpolicy.yaml 의 allow-dns 와 같은 내용이다. ANP 를 적용하지 않은 환경에서도 동작하도록 NetworkPolicy 에도 둔다
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

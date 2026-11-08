@@ -7,6 +7,8 @@
 
 ## 참고 문서
 - RHOAI 3.5 공식 문서(PDF): `/Users/edwin/Documents/Red Hat/rhoai-3_5-doc`
+또는
+- RHOAI 3.5 공식 문서(PDF): `/Users/edwin/Documents/Red Hat Product/rhoai-3_5-doc`
 - 웹 검색보다 이 폴더의 문서를 먼저 확인한다. 파일명에 주제가 들어 있다
   (예: `...-Govern_llm_access_with_models-as-a-service-en-US.pdf`, `...-Deploying_models-en-US.pdf`).
 - PDF 는 `pdftotext -layout <파일> -` 로 텍스트를 뽑아 grep 으로 찾는다. 원본 폴더에 파일을 만들지 않는다.
