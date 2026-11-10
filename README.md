@@ -200,6 +200,7 @@ uv run hf-modelcar models/<name> --archive /path/<name>.oci.tar     # 폐쇄망 
 종료 코드: `0` 성공 / `1` 검사 게이트 실패 / `2` 빌드·검증·push 실패 (skopeo 없음 포함)
 
 Red Hat `rhai/modelcar-*` 처럼 이미 빌드된 ModelCar 이미지를 폐쇄망으로 옮기는 절차는 [docs/modelcar-import.md](docs/modelcar-import.md) 를 참고하세요.
+저장소 도구 없이 uv·skopeo 만으로 같은 구조의 이미지를 만드는 수동 절차는 [docs/modelcar-build-manual.md](docs/modelcar-build-manual.md) 에 있습니다.
 
 > 배포 시 InferenceService `storageUri` 는 태그가 아니라 **digest** (`oci://...@sha256:...`)로 지정하세요.
 > 태그는 바뀔 수 있지만 digest 는 검사한 이미지와 정확히 일치합니다.
