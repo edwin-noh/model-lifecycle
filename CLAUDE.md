@@ -11,3 +11,4 @@
   (예: `...-Govern_llm_access_with_models-as-a-service-en-US.pdf`, `...-Deploying_models-en-US.pdf`).
 - PDF 는 `pdftotext -layout <파일> -` 로 텍스트를 뽑아 grep 으로 찾는다. 원본 폴더에 파일을 만들지 않는다.
 - 답변에서 근거를 들 때 문서 이름(과 절 제목)을 함께 적는다.
+- 매뉴얼 웹 검색이 필요하면 https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.5 를 찾아본다.
