@@ -45,7 +45,7 @@ def model_row(isvc: dict) -> list[str]:
         # served-model-name 은 ISVC 이름 (ServingRuntime 의 --served-model-name={{.Name}})
         f"`{name}`",
         annotations.get("openshift.io/description", ""),
-        f"`http://{name}-predictor.{ns}.svc:8080/v1`",
+        f"`https://{name}-predictor.{ns}.svc:8443/v1` (토큰)",
         _arg(args, "--max-model-len") or "모델 기본값",
         tools,
         labels.get("kbl.io/runtime-tier", "-"),
