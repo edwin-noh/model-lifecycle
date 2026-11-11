@@ -16,7 +16,7 @@ from pathlib import Path
 import yaml
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
-MODELS_DIR = PROJECT_DIR / "deploy" / "ai" / "models"
+MODELS_DIR = PROJECT_DIR / "deploy" / "ai" / "raw"
 CATALOG_FILE = PROJECT_DIR / "deploy" / "ai" / "CATALOG.md"
 
 
