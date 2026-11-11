@@ -6,7 +6,7 @@
   쓸 수밖에 없으면 출처 버전을 명시하고 "3.5 미확인"으로 표시한다.
 
 ## 참고 문서
-- RHOAI 3.5 공식 문서(PDF): `/Users/edwin/Documents/Red Hat/rhoai-3_5-doc`
+- RHOAI 3.5 공식 문서(PDF): `/Users/edwin/Documents/Red Hat/rhoai-3_5-doc` 또는 `/Users/edwin/Documents/Red Hat Product/rhoai-3_5-doc` (맥북이냐 맥미니냐에 따라 위치가 틀림)
 - 웹 검색보다 이 폴더의 문서를 먼저 확인한다. 파일명에 주제가 들어 있다
   (예: `...-Govern_llm_access_with_models-as-a-service-en-US.pdf`, `...-Deploying_models-en-US.pdf`).
 - PDF 는 `pdftotext -layout <파일> -` 로 텍스트를 뽑아 grep 으로 찾는다. 원본 폴더에 파일을 만들지 않는다.
