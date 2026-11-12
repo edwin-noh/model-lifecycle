@@ -215,10 +215,9 @@ Red Hat `rhai/modelcar-*` 처럼 이미 빌드된 ModelCar 이미지를 폐쇄�
 
 ## RHOAI 배포
 
-검증한 모델을 RHOAI 3.5(KServe Standard)에 GitOps 로 배포하는 매니페스트는 [`deploy/`](deploy/README.md) 를 참고하세요.
+검증한 모델을 RHOAI 3.5 에 GitOps(Argo CD)로 배포하는 매니페스트는 별도 리포
+[rhoai-serving-gitops](https://github.com/edwin-noh/rhoai-serving-gitops) 에 있습니다.
 
-- `deploy/ops/`: Ops팀. 플랫폼 설정, 모델 네임스페이스,
-  네트워크 격리, RBAC, vLLM 런타임, Argo CD 설정
-- `deploy/ai/`: AI팀. InferenceService
-- 런타임 등급(ga/fast/upstream)과 모델 출처(validated/community)는 라벨 + Nexus repo 로 구분
-- 에이전트 개발자용 모델 목록: [`deploy/ai/CATALOG.md`](deploy/ai/CATALOG.md) (`scripts/model-catalog.py` 로 생성)
+- `ops/`: Ops팀. 플랫폼 설정, 모델 네임스페이스, 네트워크 격리, RBAC, vLLM 런타임, MaaS, Argo CD 설정
+- `ai/`: AI팀. InferenceService / LLMInferenceService
+- 에이전트 개발자용 모델 목록: `ai/CATALOG.md` (그 리포의 `scripts/model-catalog.py` 로 생성)
